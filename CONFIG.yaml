@@ -1,0 +1,617 @@
+################################################################################
+# ARABIC ASR FACTORY - PROFESSIONAL CONFIGURATION
+# Egyptian Dialect Focused | Multi-Model | Production-Grade
+################################################################################
+
+# ============================================================================
+# CORE SETTINGS
+# ============================================================================
+
+PROJECT:
+  name: "Arabic ASR Factory - Professional Edition"
+  version: "2.0.0"
+  description: "Multi-model ASR processor for Egyptian Arabic with overlap handling"
+  language: "ar_EG"  # Arabic Egyptian
+  dialect: "egyptian_colloquial"
+  
+ENVIRONMENT:
+  runtime: "Google Colab"
+  python_min_version: "3.8"
+  cuda_support: true
+  max_runtime_hours: 12
+  checkpoint_enabled: true
+
+# ============================================================================
+# 1. ASR MODEL CONFIGURATION
+# ============================================================================
+
+ASR:
+  # Primary Model (New - Egyptian Dialect Optimized)
+  primary_model: "qwencleo"  # "qwencleo" | "whisper" | "parakeet"
+  
+  qwencleo:
+    enabled: true
+    model_id: "qwencleo-asr"
+    version: "1.7B"
+    language: "ar_EG"
+    supports_code_switching: true
+    supports_streaming: true
+    confidence_threshold: 0.6
+    device: "auto"  # "auto" | "cuda" | "cpu"
+    
+  # Backup/Ensemble Models
+  whisper:
+    enabled: true
+    model_size: "large-v2-turbo"
+    language: "ar"
+    confidence_threshold: 0.65
+    device: "auto"
+    # Use for ensemble when qwencleo confidence < threshold
+    ensemble_fallback: true
+    ensemble_threshold: 0.7
+    
+  parakeet:
+    enabled: false  # Set to true for universal Arabic
+    model_id: "nvidia/parakeet-1.1b"
+    language: "ar"
+    device: "auto"
+    
+  # Processing Parameters
+  chunk_duration_seconds: 30  # Process 30s chunks for word-level accuracy
+  overlap_seconds: 5  # Overlap between chunks for context
+  beam_size: 5  # Beam search size
+  language_prob_threshold: 0.5
+  no_speech_threshold: 0.6
+  
+  # Output Configuration
+  output_word_timestamps: true  # Critical for diarization alignment
+  output_segments: true
+  output_confidence: true
+
+# ============================================================================
+# 2. SPEAKER DIARIZATION CONFIGURATION
+# ============================================================================
+
+DIARIZATION:
+  # Primary Model (New - Overlap Aware)
+  primary_model: "eend"  # "eend" | "pyannote" | "ensemble"
+  
+  eend:
+    enabled: true
+    model_type: "eend-eda"  # Encoder-Decoder Attractor
+    pretrained: true
+    sample_rate: 16000
+    num_speakers: "auto"  # Auto-detect or set max
+    max_speakers: 8  # For Egyptian street recordings
+    overlap_aware: true  # Critical
+    frame_shift_ms: 10
+    window_ms: 512
+    device: "auto"
+    confidence_threshold: 0.4  # Lower for overlap regions
+    
+  # Backup Model (Community-based)
+  pyannote:
+    enabled: true
+    model_id: "pyannote/speaker-diarization-community-1"
+    use_authentication: true  # Requires HuggingFace token
+    min_speakers: 1
+    max_speakers: 8
+    onset: 0.5
+    offset: 0.5
+    min_duration_on: 0.1
+    min_duration_off: 0.1
+    device: "auto"
+    
+  # Ensemble Strategy
+  ensemble:
+    enabled: true
+    strategy: "confidence_weighted"  # "max_confidence" | "voting" | "confidence_weighted"
+    eend_weight: 0.7  # EEND is more overlap-aware
+    pyannote_weight: 0.3
+    
+  # Output
+  output_speaker_embeddings: true
+  output_confidence_per_speaker: true
+
+# ============================================================================
+# 3. OVERLAP DETECTION & HANDLING
+# ============================================================================
+
+OVERLAP_DETECTION:
+  enabled: true
+  detection_method: "eend"  # Primary from EEND
+  fallback_method: "confidence_based"  # If EEND unavailable
+  
+  # Classification Levels
+  thresholds:
+    no_overlap: 0.1  # < 10% overlap probability
+    mild_overlap: 0.3  # 10-30%
+    moderate_overlap: 0.6  # 30-60%
+    severe_overlap: 0.8  # 60-80%
+    extreme_overlap: 0.9  # > 80%
+    
+  # Handling Strategy
+  severe_overlap_strategy: "preserve"  # "preserve" | "separate" | "skip"
+  preserve_all_speech: true  # Critical design choice
+  
+  # Confidence thresholds
+  speaker_attribution_confidence_threshold: 0.7
+  attribution_uncertainty_label: "OVERLAP"
+  
+  # Metrics to track
+  track_overlap_duration: true
+  track_overlap_speakers: true
+  track_overlap_segments: true
+
+# ============================================================================
+# 4. SOURCE SEPARATION (Optional, for Severe Overlap)
+# ============================================================================
+
+SOURCE_SEPARATION:
+  enabled: false  # Set to true only for extreme overlap scenarios
+  
+  method: "sepformer"  # "sepformer" | "conv_tasnet" | "demucs"
+  
+  sepformer:
+    model_id: "facebook/sepformer-libri2mix"
+    sample_rate: 16000
+    max_speakers: 2  # For Egyptian: up to 2 speakers at a time
+    device: "auto"
+    
+  # Only apply to:
+  apply_to_severe_overlap_only: true
+  apply_threshold: 0.85  # confidence threshold
+  max_chunk_duration_seconds: 5  # Don't process long segments
+  
+  # Memory management
+  batch_size: 1
+  unload_after_use: true
+
+# ============================================================================
+# 5. SPEECH ENHANCEMENT & PREPROCESSING
+# ============================================================================
+
+SPEECH_ENHANCEMENT:
+  enabled: true
+  
+  # Multi-stage enhancement
+  stages:
+    - stage: "normalization"
+      enabled: true
+      target_loudness: -23  # LUFS (Loudness Units relative to Full Scale)
+      
+    - stage: "noise_reduction"
+      enabled: true
+      method: "rnnoise"  # "rnnoise" | "demucs" | "none"
+      apply_only_if_needed: true
+      noise_level_threshold: -20  # dB SNR
+      
+    - stage: "spectral_gating"
+      enabled: true
+      gate_threshold: -40  # dB
+      
+    - stage: "voice_enhancement"
+      enabled: false  # Set true for very quiet speech
+      method: "demucs"  # Only if noise_reduction detects vocal
+      
+  # Quality-based triggering
+  quality_based_enhancement:
+    enabled: true
+    enhance_if_confidence_below: 0.7
+    enhance_if_noise_ratio_above: 0.4
+    enhance_if_snr_below: 15
+    
+  # Preserve accent (critical for Egyptian)
+  preserve_accent: true
+  preserve_formants: true
+  preserve_prosody: true
+  
+  # Models
+  rnnoise:
+    model_id: "xiph/rnnoise"
+    device: "auto"
+    
+  demucs:
+    model_id: "facebook/demucs-quantized"
+    separate_vocals_only: true
+    device: "auto"
+
+# ============================================================================
+# 6. EGYPTIAN DIALECT PROCESSING
+# ============================================================================
+
+DIALECT_PROCESSING:
+  enabled: true
+  dialect: "egyptian_colloquial"
+  
+  # Code-switching detection
+  code_switching:
+    enabled: true
+    detect_english: true
+    detect_french: true
+    mark_code_switches: true
+    preserve_mixed_speech: true
+    
+  # Colloquial Normalization
+  colloquial_normalization:
+    enabled: false  # Keep raw dialect unless preprocessing
+    preserve_original: true
+    maintain_accent_markers: true
+    
+  # Egyptian-specific features
+  features:
+    preserve_glottal_stops: true
+    handle_emphatic_consonants: true
+    preserve_negation_markers: true  # ما فيش، ما في، إلخ
+    
+  # Common Egyptian expressions (preserve as-is)
+  preserve_expressions:
+    - "كده"
+    - "ما فيش"
+    - "في الشارع"
+    - "يا جماعة"
+    - "شنطة"
+    - "تمام التمام"
+
+# ============================================================================
+# 7. CONFIDENCE & QUALITY STRATIFICATION
+# ============================================================================
+
+CONFIDENCE_STRATIFICATION:
+  enabled: true
+  
+  # Multi-dimensional confidence
+  metrics:
+    asr_confidence:
+      weight: 0.4
+      threshold_high: 0.85
+      threshold_medium: 0.7
+      threshold_low: 0.5
+      
+    diarization_confidence:
+      weight: 0.3
+      threshold_high: 0.8
+      threshold_medium: 0.6
+      threshold_low: 0.4
+      
+    speaker_attribution_confidence:
+      weight: 0.2
+      threshold_high: 0.75
+      threshold_medium: 0.6
+      threshold_low: 0.4
+      
+    overlap_confidence:
+      weight: 0.1
+      threshold_high: 0.9
+      threshold_medium: 0.7
+      
+  # Quality Tiers
+  quality_tiers:
+    HIGH: 0.85  # All metrics solid
+    MEDIUM: 0.7  # Most metrics good
+    LOW: 0.5  # Some concerning metrics
+    UNCERTAIN: 0.3  # Major uncertainty (overlap/noise)
+    
+  # Flags for review
+  flag_for_manual_review_if_below: 0.6
+  flag_overlap_if_above: 0.7
+
+# ============================================================================
+# 8. MULTI-MODEL ENSEMBLE
+# ============================================================================
+
+ENSEMBLE:
+  enabled: true
+  strategy: "smart_fallback"  # "smart_fallback" | "voting" | "confidence_weighted"
+  
+  # When to use ensemble
+  trigger_conditions:
+    primary_confidence_below: 0.7
+    overlap_detected: true
+    high_noise_detected: true
+    
+  # Model combinations
+  asr_ensemble:
+    models:
+      - qwencleo
+      - whisper
+      - parakeet  # Optional
+    voting_strategy: "confidence_weighted"
+    min_agreement_for_acceptance: 0.8
+    
+  diarization_ensemble:
+    models:
+      - eend
+      - pyannote
+    voting_strategy: "confidence_weighted"
+    
+  # Reconciliation
+  reconciliation:
+    method: "confidence_weighted_merge"
+    text_similarity_threshold: 0.85  # For accepting matches
+    timestamp_tolerance_ms: 500
+
+# ============================================================================
+# 9. CUSTOM FINE-TUNING (Optional)
+# ============================================================================
+
+FINE_TUNING:
+  enabled: false  # Set true only after collecting training data
+  
+  # Fine-tuning targets
+  targets:
+    asr: false  # Fine-tune QwenCleo on project data
+    diarization: false  # Fine-tune EEND on project data
+    
+  asr_finetuning:
+    training_data_source: "project_best_segments"
+    epochs: 3
+    learning_rate: 1e-5
+    batch_size: 4
+    validation_split: 0.1
+    save_best_model: true
+    
+  diarization_finetuning:
+    training_data_source: "project_best_segments"
+    epochs: 5
+    learning_rate: 1e-4
+    batch_size: 2
+
+# ============================================================================
+# 10. AUDIO PROCESSING PIPELINE
+# ============================================================================
+
+AUDIO_PROCESSING:
+  # Input formats
+  supported_formats:
+    - "wav"
+    - "mp3"
+    - "m4a"
+    - "flac"
+    - "amr"
+    - "ogg"
+    - "aac"
+    
+  # Normalization
+  normalization:
+    target_sample_rate: 16000  # Required for all models
+    target_channels: 1  # Mono
+    bit_depth: 16
+    
+  # Chunking strategy
+  chunking:
+    method: "sliding_window"
+    chunk_duration_seconds: 30
+    overlap_seconds: 5
+    min_chunk_duration_seconds: 2
+    avoid_mid_word_cuts: true
+    
+  # Resampling
+  resampling:
+    method: "librosa"  # "librosa" | "scipy" | "ffmpeg"
+    quality: "high"
+
+# ============================================================================
+# 11. OUTPUT FORMATS
+# ============================================================================
+
+OUTPUT:
+  formats:
+    json: true  # Rich structured output
+    txt: true  # Human-readable transcript
+    docx: true  # Professional document
+    excel: true  # Spreadsheet with analysis
+    csv: false  # Raw data
+    vtt: false  # Video subtitles
+    srt: false  # Movie subtitles
+    
+  # Directory structure
+  output_dir: "/content/drive/MyDrive/ASR_OUTPUT"
+  create_subdirs: true  # file_001/, file_002/, etc.
+  
+  # Detailed outputs
+  include_segments: true
+  include_words: true
+  include_speakers: true
+  include_overlaps: true
+  include_confidence: true
+  include_timestamps: true
+  include_quality_flags: true
+  include_statistics: true
+  include_processing_logs: true
+  
+  # JSON structure enrichment
+  json_enrichment:
+    include_raw_features: false  # Save embeddings?
+    include_model_info: true
+    include_processing_metadata: true
+
+# ============================================================================
+# 12. CHECKPOINT & RESUME
+# ============================================================================
+
+CHECKPOINT:
+  enabled: true
+  checkpoint_dir: "/content/drive/MyDrive/ASR_CHECKPOINTS"
+  auto_checkpoint_interval_minutes: 30
+  
+  # What to save
+  save_progress: true
+  save_intermediate_results: true
+  save_model_state: true  # For fine-tuning continuity
+  save_memory_state: false  # Large, only if needed
+  
+  # Recovery
+  resume_from_last_checkpoint: true
+  skip_completed_files: true
+  skip_completed_chunks: true
+  verify_checkpoint_integrity: true
+
+# ============================================================================
+# 13. MONITORING & LOGGING
+# ============================================================================
+
+MONITORING:
+  enabled: true
+  log_level: "INFO"  # "DEBUG" | "INFO" | "WARNING" | "ERROR"
+  
+  # Real-time monitoring
+  show_progress_bar: true
+  show_memory_usage: true
+  show_processing_speed: true
+  update_frequency_seconds: 5
+  
+  # Memory alerts
+  ram_warning_threshold_percent: 80
+  vram_warning_threshold_percent: 85
+  disk_warning_threshold_gb: 5
+  
+  # Logging
+  log_file: "/content/drive/MyDrive/ASR_LOGS/processing.log"
+  log_errors: true
+  log_warnings: true
+  log_performance_metrics: true
+  
+  # Metrics to track
+  track_wer: false  # Only if ground truth available
+  track_der: false  # Diarization Error Rate
+  track_processing_time: true
+  track_quality_distribution: true
+
+# ============================================================================
+# 14. SYSTEM REQUIREMENTS & LIMITS
+# ============================================================================
+
+SYSTEM:
+  min_ram_gb: 4
+  min_disk_free_gb: 50  # For long recordings
+  min_vram_gb: 2  # If GPU
+  
+  # Batch processing
+  max_concurrent_files: 1  # Sequential for stability
+  max_file_duration_hours: 12
+  max_total_duration_hours: 100  # Per session
+  
+  # Timeouts
+  chunk_processing_timeout_minutes: 10
+  file_processing_timeout_minutes: 60
+  session_timeout_hours: 12
+
+# ============================================================================
+# 15. QUALITY ASSURANCE
+# ============================================================================
+
+QUALITY_ASSURANCE:
+  enabled: true
+  
+  # Automatic validation
+  validate_output_integrity: true
+  validate_timestamp_continuity: true
+  validate_speaker_consistency: true
+  
+  # Review system
+  flag_segments_for_review: true
+  review_threshold: 0.6
+  
+  # Statistics
+  generate_quality_report: true
+  generate_comparison_report: true  # vs other models
+  
+  # Error tracking
+  track_errors: true
+  track_retries: true
+  track_skipped_segments: true
+
+# ============================================================================
+# 16. GOOGLE DRIVE & CLOUD
+# ============================================================================
+
+GOOGLE_DRIVE:
+  enabled: true
+  auto_mount: true
+  input_folder: "/content/drive/MyDrive/ASR_INPUT"
+  output_folder: "/content/drive/MyDrive/ASR_OUTPUT"
+  
+  # Sync options
+  sync_results_continuously: true
+  auto_backup_checkpoints: true
+  cleanup_local_temp: true
+
+# ============================================================================
+# 17. HUGGING FACE INTEGRATION
+# ============================================================================
+
+HUGGING_FACE:
+  use_cache: true
+  cache_dir: "/content/.cache/huggingface"
+  hf_token_env_var: "HF_TOKEN"
+  
+  # Model caching
+  models_to_preload:
+    - "qwencleo-asr"
+    - "pyannote/speaker-diarization-community-1"
+    - "facebook/sepformer-libri2mix"  # If separation enabled
+    - "xiph/rnnoise"
+
+# ============================================================================
+# 18. LANGUAGE & LOCALE
+# ============================================================================
+
+LANGUAGE:
+  primary: "ar"  # Arabic
+  dialect: "ar_EG"  # Egyptian Arabic
+  
+  # Text processing
+  preserve_diacritics: false
+  normalize_numbers: false  # Keep numeric as text/digits
+  preserve_punctuation: true
+  
+  # Output language
+  output_language: "ar"  # All output in Arabic
+
+# ============================================================================
+# 19. TESTING & VALIDATION
+# ============================================================================
+
+TESTING:
+  enabled: true
+  
+  # Test mode
+  test_mode: false  # Set true for single-file testing
+  test_file_duration_minutes: 2
+  test_file_path: ""  # Will auto-detect
+  
+  # Validation checks
+  validate_ffmpeg: true
+  validate_pytorch: true
+  validate_models_download: true
+  validate_gpu_access: true
+  validate_hf_authentication: true
+  validate_drive_access: true
+  
+  # Dry run
+  dry_run_mode: false  # Plan without executing
+
+# ============================================================================
+# 20. PERFORMANCE OPTIMIZATION
+# ============================================================================
+
+PERFORMANCE:
+  device_strategy: "gpu_first"  # "gpu_first" | "cpu_only" | "balanced"
+  
+  # Memory optimization
+  enable_mixed_precision: true  # fp16
+  enable_gradient_checkpointing: true  # For fine-tuning
+  empty_cache_frequency_chunks: 3  # Clear GPU memory every N chunks
+  
+  # Processing optimization
+  num_workers_data_loading: 4
+  prefetch_chunks: 2
+  
+  # Model loading
+  load_models_lazily: true  # Load only when needed
+  unload_models_after_processing: true
+
+################################################################################
+# END OF CONFIGURATION
+################################################################################
